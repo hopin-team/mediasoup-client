@@ -45,7 +45,7 @@ export class Chrome74 extends HandlerInterface
 	// RTCPeerConnection instance.
 	private _pc: any;
 	// Map of RTCTransceivers indexed by MID.
-	private readonly _mapMidTransceiver: Map<string, RTCRtpTransceiver> =
+	private readonly _mapMidTransceiver: Map<string, RTCRtpTransceiver | null> =
 		new Map();
 	// Local stream for sending.
 	private readonly _sendStream = new MediaStream();
@@ -55,6 +55,9 @@ export class Chrome74 extends HandlerInterface
 	private _nextSendSctpStreamId = 0;
 	// Got transport local and remote parameters.
 	private _transportReady = false;
+	// There is one renegotiation in progress
+	private _negotiationInProgress: Promise<void> | null = null;
+	private _negotiationOwner: string | null = null
 
 	/**
 	 * Creates a factory function.
@@ -72,6 +75,11 @@ export class Chrome74 extends HandlerInterface
 	get name(): string
 	{
 		return 'Chrome74';
+	}
+
+	get concurrentOperationsSupported(): boolean
+	{
+		return true
 	}
 
 	close(): void
@@ -634,6 +642,11 @@ export class Chrome74 extends HandlerInterface
 
 		const localId = rtpParameters.mid || String(this._mapMidTransceiver.size);
 
+		// Store in the map without a transceiver while in progress so that we
+		// can keep using "this._mapMidTransceiver.size" to assign localIds
+		// TBD Clean this map if the receive operation fails
+		this._mapMidTransceiver.set(localId, null)
+
 		this._remoteSdp!.receive(
 			{
 				mid                : localId,
@@ -643,43 +656,76 @@ export class Chrome74 extends HandlerInterface
 				trackId
 			});
 
-		const offer = { type: 'offer', sdp: this._remoteSdp!.getSdp() };
+		if (this._negotiationInProgress) {
+			await this._negotiationInProgress;
+		}
 
-		logger.debug(
-			'receive() | calling pc.setRemoteDescription() [offer:%o]',
-			offer);
+		if (!this._negotiationOwner) {
+			this._negotiationOwner = localId;
+			let resolve: any = null;
+			let reject: any = null;
+			this._negotiationInProgress = new Promise((res, rej) => {
+				resolve = res;
+				reject = rej;
+			})
+			
+			try {
+				const offer = { type: 'offer', sdp: this._remoteSdp!.getSdp() };
 
-		await this._pc.setRemoteDescription(offer);
+				logger.debug(
+					'receive() | calling pc.setRemoteDescription() [offer:%o]',
+					offer);
 
-		let answer = await this._pc.createAnswer();
-		const localSdpObject = sdpTransform.parse(answer.sdp);
-		const answerMediaObject = localSdpObject.media
-			.find((m: any) => String(m.mid) === localId);
+				await this._pc.setRemoteDescription(offer);
 
-		// May need to modify codec parameters in the answer based on codec
-		// parameters in the offer.
-		sdpCommonUtils.applyCodecParameters(
+				let answer = await this._pc.createAnswer();
+				const localSdpObject = sdpTransform.parse(answer.sdp);
+				const answerMediaObject = localSdpObject.media
+					.find((m: any) => String(m.mid) === localId);
+
+				// TBD Problem here
+				// May need to modify codec parameters in the answer based on codec
+				// parameters in the offer.
+				sdpCommonUtils.applyCodecParameters(
+					{
+						offerRtpParameters : rtpParameters,
+						answerMediaObject
+					});
+
+				answer = { type: 'answer', sdp: sdpTransform.write(localSdpObject) };
+
+				if (!this._transportReady)
+					await this._setupTransport({ localDtlsRole: 'client', localSdpObject });
+
+				logger.debug(
+					'receive() | calling pc.setLocalDescription() [answer:%o]',
+					answer);
+
+				await this._pc.setLocalDescription(answer);
+
+				this._negotiationOwner = null
+				this._negotiationInProgress = null
+				if (resolve) resolve()
+			}
+			catch (error)
 			{
-				offerRtpParameters : rtpParameters,
-				answerMediaObject
-			});
-
-		answer = { type: 'answer', sdp: sdpTransform.write(localSdpObject) };
-
-		if (!this._transportReady)
-			await this._setupTransport({ localDtlsRole: 'client', localSdpObject });
-
-		logger.debug(
-			'receive() | calling pc.setLocalDescription() [answer:%o]',
-			answer);
-
-		await this._pc.setLocalDescription(answer);
+				this._negotiationOwner = null
+				this._negotiationInProgress = null
+				if (reject) reject(error)
+			}
+		}
+		else
+		{
+			await this._negotiationInProgress;
+		}
 
 		const transceiver = this._pc.getTransceivers()
 			.find((t: RTCRtpTransceiver) => t.mid === localId);
 
 		if (!transceiver)
+		{
 			throw new Error('new RTCRtpTransceiver not found');
+		}
 
 		// Store in the map.
 		this._mapMidTransceiver.set(localId, transceiver);
