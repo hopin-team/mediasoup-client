@@ -824,7 +824,7 @@ export class Chrome74 extends HandlerInterface
 
 		transceiver.direction = 'inactive';
 		
-		this.renegotiateReceive();
+		await this.renegotiateReceive();
 	}
 
 	async resumeReceiving(localId: string): Promise<void>
@@ -840,7 +840,7 @@ export class Chrome74 extends HandlerInterface
 
 		transceiver.direction = 'recvonly';
 		
-		this.renegotiateReceive();
+		await this.renegotiateReceive();
 	}
 
 	async getReceiverStats(localId: string): Promise<RTCStatsReport>
