@@ -10,6 +10,7 @@ export declare class Chrome74 extends HandlerInterface {
     private _sendingRemoteRtpParametersByKind?;
     private _pc;
     private readonly _mapMidTransceiver;
+    private _nextRecvLocalId;
     private readonly _sendStream;
     private _hasDataChannelMediaSection;
     private _nextSendSctpStreamId;

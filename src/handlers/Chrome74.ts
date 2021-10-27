@@ -47,6 +47,8 @@ export class Chrome74 extends HandlerInterface
 	// Map of RTCTransceivers indexed by MID.
 	private readonly _mapMidTransceiver: Map<string, RTCRtpTransceiver | null> =
 		new Map();
+	// Index to generate consecutive transceiver ids (mids) avoiding duplicates
+	private _nextRecvLocalId = 0;
 	// Local stream for sending.
 	private readonly _sendStream = new MediaStream();
 	// Whether a DataChannel m=application section has been created.
@@ -748,11 +750,7 @@ export class Chrome74 extends HandlerInterface
 	{
 		this._assertReceiveDirection();
 
-		const localId = rtpParameters.mid || String(this._mapMidTransceiver.size);
-
-		// Store in the map without a transceiver while in progress so that we
-		// can keep using "this._mapMidTransceiver.size" to assign localIds.
-		this._mapMidTransceiver.set(localId, null);
+		const localId = rtpParameters.mid || String(this._nextRecvLocalId++);
 
 		this._remoteSdp!.receive(
 			{
